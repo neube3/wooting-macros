@@ -7,6 +7,7 @@ use rayon::prelude::*;
 use log::*;
 
 use itertools::Itertools;
+use uuid::Uuid;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -45,9 +46,9 @@ use crate::plugin::system_event;
 pub enum MacroType {
     Single,
     // Single macro fire
-    Toggle,
+    Toggle(bool),
     // press to start, press to finish cycle and terminate
-    OnHold, // while held Execute macro (repeats)
+    OnHold(bool), // while held Execute macro (repeats)
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -168,7 +169,11 @@ impl Macro {
 type Collections = Vec<Collection>;
 
 /// Hashmap to check the first trigger key of each macro.
-type MacroTriggerLookup = HashMap<u32, Vec<Macro>>;
+type MacroTriggerLookup = HashMap<u32, Vec<String>>;
+
+
+type MacroLookupHook = HashMap<String, Macro>;
+
 
 /// State of the application in RAM (RWlock).
 #[derive(Debug)]
@@ -176,6 +181,7 @@ pub struct MacroBackend {
     pub data: Arc<RwLock<MacroData>>,
     pub config: Arc<RwLock<ApplicationConfig>>,
     pub triggers: Arc<RwLock<MacroTriggerLookup>>,
+    pub lookup_hook: Arc<RwLock<MacroTriggerLookup>>,
     pub is_listening: Arc<AtomicBool>,
     pub display_list: Arc<RwLock<Vec<system_event::Monitor>>>,
 }
@@ -200,6 +206,8 @@ impl Default for MacroData {
 }
 
 impl MacroData {
+    
+    
     /// Extracts the first trigger data from the macros.
     pub fn extract_triggers(&self) -> MacroTriggerLookup {
         let mut output_hashmap = MacroTriggerLookup::new();
@@ -266,11 +274,13 @@ async fn execute_macro(macros: Macro, channel: UnboundedSender<rdev::EventType>)
                 macros.execute(cloned_channel).await;
             });
         }
-        MacroType::Toggle => {
+        MacroType::Toggle(keep_playing) => {
+            
+          
             //Postponed
             //execute_macro_toggle(&macros).await;
         }
-        MacroType::OnHold => {
+        MacroType::OnHold(keep_playing) => {
             //Postponed
             //execute_macro_onhold(&macros).await;
         }
@@ -380,6 +390,27 @@ fn check_macro_execution_efficiently(
 }
 
 impl MacroBackend {
+    pub async fn generate_hooks(&self) {
+        for collection in self.data.read().await.data.iter(){
+            for macro_item in collection.macros.iter(){
+                loop {
+                    let uuid = Uuid::new_v4().to_string();
+        
+                    if self.lookup_hook.read().await.get(&uuid).is_none() {
+                        self.lookup_hook.write().await.insert(uuid, macro_item.clone());
+                        break;
+                    }
+                }
+                
+                
+            }
+        }
+
+
+
+        
+    }
+    
     /// Creates the data directory if not present in %appdata% (only in release build).
     pub fn generate_directories() {
         #[cfg(not(debug_assertions))]
